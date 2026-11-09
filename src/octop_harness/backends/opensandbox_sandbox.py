@@ -29,6 +29,8 @@ from deepagents.backends.protocol import (
 )
 from deepagents.backends.sandbox import BaseSandbox
 
+from octop_harness.backends.utils import normalize_sandbox_workspace_dir
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_IMAGE = "python:3.12"
@@ -87,6 +89,13 @@ class OpenSandbox(BaseSandbox):
 
     Construct via ``resolve_backend({"type": "opensandbox", ...})``.
     :meth:`close` destroys the remote sandbox (agent-runtime lifecycle).
+
+    By default the sandbox root ``/`` is the agent workspace. Set
+    ``sandbox_workspace_dir`` (for example ``/workspace``) to keep the workspace
+    in a directory of its own: the harness then maps workspace-relative paths to
+    it, tells the model it is the working directory, and ``execute`` starts
+    there. The directory is created on the first ``execute``; system trees such
+    as ``/home`` and ``/tmp`` stay outside the workspace.
     """
 
     def __init__(
@@ -100,6 +109,7 @@ class OpenSandbox(BaseSandbox):
         command_timeout: int | None = None,
         use_server_proxy: bool = False,
         sandbox: Any | None = None,
+        sandbox_workspace_dir: str | None = None,
         **_ignored: Any,
     ) -> None:
         _import_opensandbox()
@@ -107,6 +117,10 @@ class OpenSandbox(BaseSandbox):
 
         self.sandbox_fs: bool = True
         self.virtual_mode: bool = True
+        # ``""``: the sandbox root is the workspace. Read by ``BackendWorkspace``,
+        # ``FilesystemGuardMiddleware`` and ``HarnessAgent``.
+        self.sandbox_workspace_dir: str = normalize_sandbox_workspace_dir(sandbox_workspace_dir)
+        self._workspace_dir_ready = False
         self._closed = False
         self._default_timeout = int(command_timeout if command_timeout is not None else timeout)
         self._sandbox: Any
@@ -132,6 +146,23 @@ class OpenSandbox(BaseSandbox):
         sid = getattr(self._sandbox, "id", None) or getattr(self._sandbox, "sandbox_id", None)
         return str(sid or "")
 
+    def _ensure_workspace_dir(self) -> ExecuteResponse | None:
+        """Create ``sandbox_workspace_dir`` once; an error response when that fails."""
+        if self._workspace_dir_ready or not self.sandbox_workspace_dir:
+            return None
+        quoted = shlex.quote(self.sandbox_workspace_dir)
+        # Runs without ``working_directory``: the directory may not exist yet.
+        created = self._sandbox.commands.run(f"mkdir -p {quoted}")
+        exit_code = int(getattr(created, "exit_code", 0) or 0)
+        if exit_code != 0:
+            return ExecuteResponse(
+                output=f"cannot create the workspace directory {self.sandbox_workspace_dir!r} in the sandbox",
+                exit_code=exit_code,
+                truncated=False,
+            )
+        self._workspace_dir_ready = True
+        return None
+
     def execute(
         self,
         command: str,
@@ -139,12 +170,16 @@ class OpenSandbox(BaseSandbox):
         timeout: int | None = None,
     ) -> ExecuteResponse:
         effective = timeout if timeout is not None else self._default_timeout
+        failed = self._ensure_workspace_dir()
+        if failed is not None:
+            return failed
         opts = None
         try:
             from opensandbox.models.execd import RunCommandOpts
 
             opts = RunCommandOpts(
                 timeout=timedelta(seconds=effective) if effective else None,
+                working_directory=self.sandbox_workspace_dir or None,
             )
         except ImportError:
             opts = None

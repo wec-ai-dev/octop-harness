@@ -1191,8 +1191,14 @@ class HarnessAgent:
         Prefer the configured ``workspace_dir`` (what the host persisted /
         passed). When that is already a host path under a scoped virtual
         ``root_dir``, present it as a rootfs-absolute path so it matches
-        the virtual ``/`` file tools use.
+        the virtual ``/`` file tools use. A sandbox backend that declares a
+        ``sandbox_workspace_dir`` wins: the model works in that directory.
         """
+        from octop_harness.backends.utils import sandbox_workspace_dir_of
+
+        sandbox_workspace = sandbox_workspace_dir_of(getattr(self, "_backend", None))
+        if sandbox_workspace:
+            return Path(sandbox_workspace)
         configured = Path(self._config.workspace_dir)
         text = configured.as_posix().replace("\\", "/").strip()
         if text == "/" or text.startswith("/.octop/"):

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from octop_harness.backends import resolve_backend, spec_supports_execution
+from octop_harness.backends import BackendWorkspace, resolve_backend, spec_supports_execution
+from octop_harness.backends.opensandbox_sandbox import OpenSandbox
 
 
 def _msg(text: str) -> SimpleNamespace:
@@ -151,3 +154,68 @@ class TestLifecycle:
         backend = resolve_backend({"type": "opensandbox", "domain": "127.0.0.1:8080"})
         with pytest.raises(OSError, match="missing"):
             backend.move_path("/skills/old", "/skills/new")
+
+
+class TestSandboxWorkspaceDir:
+    """``sandbox_workspace_dir`` keeps the agent workspace out of the sandbox root."""
+
+    @staticmethod
+    def _run_opts() -> MagicMock:
+        return sys.modules["opensandbox.models.execd"].RunCommandOpts  # type: ignore[no-any-return]
+
+    def test_default_has_no_directory_and_runs_commands_as_before(self, mock_opensandbox: Any) -> None:
+        _sync, sandbox, _conn = mock_opensandbox
+        backend = resolve_backend({"type": "opensandbox", "domain": "127.0.0.1:8080"})
+        assert backend.sandbox_workspace_dir == ""
+        backend.execute("echo hi")
+        assert self._run_opts().call_args.kwargs["working_directory"] is None
+        assert sandbox.commands.run.call_count == 1
+
+    def test_commands_start_in_the_directory_created_once(self, mock_opensandbox: Any) -> None:
+        _sync, sandbox, _conn = mock_opensandbox
+        backend = resolve_backend(
+            {"type": "opensandbox", "domain": "127.0.0.1:8080", "sandbox_workspace_dir": "/workspace/"}
+        )
+        assert backend.sandbox_workspace_dir == "/workspace"
+        assert backend.execute("ls").exit_code == 0
+        assert backend.execute("pwd").exit_code == 0
+        calls = sandbox.commands.run.call_args_list
+        assert len(calls) == 3
+        assert calls[0].args == ("mkdir -p /workspace",)
+        assert "opts" not in calls[0].kwargs
+        assert [call.args[0] for call in calls[1:]] == ["ls", "pwd"]
+        assert self._run_opts().call_args.kwargs["working_directory"] == "/workspace"
+
+    def test_injected_sandbox_gets_the_same_behaviour(self, mock_opensandbox: Any) -> None:
+        _sync, sandbox, _conn = mock_opensandbox
+        backend = OpenSandbox(sandbox=sandbox, sandbox_workspace_dir="/workspace")
+        backend.execute("ls")
+        assert sandbox.commands.run.call_args_list[0].args == ("mkdir -p /workspace",)
+        assert self._run_opts().call_args.kwargs["working_directory"] == "/workspace"
+
+    def test_directory_failure_is_reported_and_retried(self, mock_opensandbox: Any) -> None:
+        _sync, sandbox, _conn = mock_opensandbox
+        backend = resolve_backend(
+            {"type": "opensandbox", "domain": "127.0.0.1:8080", "sandbox_workspace_dir": "/workspace"}
+        )
+        sandbox.commands.run.return_value = _execution(stdout="", exit_code=1)
+        failed = backend.execute("ls")
+        assert failed.exit_code == 1
+        assert "/workspace" in failed.output
+        assert sandbox.commands.run.call_count == 1
+        sandbox.commands.run.return_value = _execution()
+        assert backend.execute("ls").exit_code == 0
+
+    def test_relative_directory_is_rejected(self, mock_opensandbox: Any) -> None:
+        with pytest.raises(ValueError, match="absolute"):
+            resolve_backend({"type": "opensandbox", "domain": "127.0.0.1:8080", "sandbox_workspace_dir": "workspace"})
+
+    def test_backend_workspace_maps_into_the_directory(self, mock_opensandbox: Any, tmp_path: Path) -> None:
+        _sync, sandbox, _conn = mock_opensandbox
+        backend = resolve_backend(
+            {"type": "opensandbox", "domain": "127.0.0.1:8080", "sandbox_workspace_dir": "/workspace"}
+        )
+        workspace = BackendWorkspace(backend, tmp_path)
+        assert workspace.resolve_path("notes/a.md") == "/workspace/notes/a.md"
+        workspace.mkdir("notes")
+        assert sandbox.commands.run.call_args.args[0] == "mkdir -p /workspace/notes"

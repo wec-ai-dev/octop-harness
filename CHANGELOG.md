@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 新增
+
+- 沙箱后端可以声明 `sandbox_workspace_dir`（如 `/workspace`），把智能体工作区放在沙箱里的独立目录，而不是沙箱根目录 `/`。OpenSandbox 后端接受同名参数：工作区相对路径映射到该目录，给模型的工作目录提示和文件工具的相对路径以它为准，`execute` 默认在该目录运行，目录在第一次 `execute` 时自动创建；`/home`、`/tmp` 等系统目录不在工作区内。不声明时行为不变。
+
 ## [1.0.8] - 2026-11-05
 
 ### 新增

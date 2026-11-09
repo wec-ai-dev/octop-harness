@@ -1643,6 +1643,76 @@ class TestAgentVisibleWorkspaceDir:
             prompt = create.call_args.kwargs["system_prompt"]
             assert f"Your working directory is {Path(cfg.workspace_dir).resolve()}" in prompt
 
+    @staticmethod
+    def _sandbox_backend(host_workspace: Path, sandbox_workspace_dir: str | None) -> Any:
+        """A sandbox backend shaped like the one Octop passes for platform assistants."""
+
+        class _Sandbox:
+            sandbox_fs = True
+            virtual_mode = True
+            root_dir = host_workspace
+            cwd = host_workspace
+
+            def read(self, *args: Any, **kwargs: Any) -> Any:
+                raise NotImplementedError
+
+            write = edit = ls = glob = grep = read
+
+        backend = _Sandbox()
+        if sandbox_workspace_dir is not None:
+            backend.sandbox_workspace_dir = sandbox_workspace_dir  # type: ignore[attr-defined]
+        return backend
+
+    def _sandbox_agent_prompt(
+        self,
+        tmp_path: Path,
+        mock_model_factory: Callable[[], Any],
+        stub_create_deep_agent: Any,
+        sandbox_workspace_dir: str | None,
+    ) -> tuple[Path, str]:
+        cfg = HarnessAgentConfig(
+            name="sandbox-ws",
+            workspace_dir=tmp_path,
+            system_files_path=".octop",
+            backend=self._sandbox_backend(tmp_path, sandbox_workspace_dir),
+            providers=[
+                ProviderConfig(
+                    id="p",
+                    base_url="https://x",
+                    api_key="k",
+                    models=[ModelConfig(id="text", input=["text"])],
+                ),
+            ],
+            default_model="p/text",
+            memory_enabled=False,
+            checkpointer=False,
+        )
+        with mock_model_factory(), stub_create_deep_agent as create:
+            agent = HarnessAgent(cfg)
+            return agent._agent_visible_workspace_dir(), str(create.call_args.kwargs["system_prompt"])
+
+    def test_sandbox_workspace_dir_is_the_working_directory_in_the_prompt(
+        self,
+        tmp_path: Path,
+        mock_model_factory: Callable[[], Any],
+        stub_create_deep_agent: Any,
+    ) -> None:
+        visible, prompt = self._sandbox_agent_prompt(tmp_path, mock_model_factory, stub_create_deep_agent, "/workspace")
+        assert visible == Path("/workspace")
+        assert "Your working directory is /workspace" in prompt
+        assert "/workspace/notes.txt" in prompt
+        assert str(tmp_path) not in prompt
+
+    def test_sandbox_without_workspace_dir_keeps_the_root_as_workspace(
+        self,
+        tmp_path: Path,
+        mock_model_factory: Callable[[], Any],
+        stub_create_deep_agent: Any,
+    ) -> None:
+        visible, prompt = self._sandbox_agent_prompt(tmp_path, mock_model_factory, stub_create_deep_agent, None)
+        assert visible == Path("/")
+        assert "Your working directory is /. " in prompt
+
     def test_compiled_system_prompt_includes_slash_skill_rule(
         self,
         cfg: HarnessAgentConfig,

@@ -43,6 +43,8 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 from wcmatch import glob as wcglob
 
+from octop_harness.backends.utils import sandbox_workspace_dir_of
+
 if TYPE_CHECKING:
     from octop_harness.backends.workspace import BackendWorkspace
 
@@ -528,7 +530,8 @@ class FilesystemGuardMiddleware(AgentMiddleware[Any, Any]):
 
         Docker and OpenSandbox set ``sandbox_fs``. bubblewrap sets
         ``virtual_tool_root``. Relative paths stay under ``/`` so each backend
-        maps them into its own workspace.
+        maps them into its own workspace; a sandbox that declares
+        ``sandbox_workspace_dir`` resolves them there instead.
         """
         backend = self._execution_backend()
         if backend is None:
@@ -537,7 +540,7 @@ class FilesystemGuardMiddleware(AgentMiddleware[Any, Any]):
 
     def _relative_root(self) -> str:
         if self._uses_virtual_tool_root():
-            return "/"
+            return sandbox_workspace_dir_of(self._execution_backend()) or "/"
         return str(self._workspace_dir or ".")
 
     def _shell_cwd(self, path: str) -> str:

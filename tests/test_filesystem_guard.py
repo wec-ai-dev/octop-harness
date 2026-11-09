@@ -412,3 +412,53 @@ def test_blocks_ls_on_macos_private_etc_alias() -> None:
     )
     assert reason is not None
     assert "permission denied" in reason
+
+
+def _guarded_args(name: str, args: dict[str, object], workspace: SimpleNamespace) -> dict[str, object]:
+    request = ToolCallRequest(
+        tool_call={"name": name, "args": args, "id": "call-1"},
+        tool=None,
+        state={},
+        runtime=None,  # type: ignore[arg-type]
+    )
+    seen: dict[str, object] = {}
+
+    def handler(item: ToolCallRequest) -> ToolMessage:
+        seen.update(item.tool_call["args"])
+        return ToolMessage(content="ok", tool_call_id="call-1")
+
+    FilesystemGuardMiddleware(
+        workspace_dir="/home/wally/.octop/agents/Q6084B",
+        workspace=workspace,  # type: ignore[arg-type]
+    ).wrap_tool_call(request, handler)
+    return seen
+
+
+def test_sandbox_workspace_dir_is_where_relative_paths_start() -> None:
+    workspace = _sandbox_workspace(sandbox_workspace_dir="/workspace")
+    assert _guarded_args("read_file", {"file_path": "docs/guide.md"}, workspace) == {
+        "file_path": "/workspace/docs/guide.md"
+    }
+    assert _guarded_args("ls", {"path": "."}, workspace) == {"path": "/workspace"}
+    assert _guarded_args("glob", {"pattern": "**/*.md"}, workspace) == {"pattern": "**/*.md", "path": "/workspace"}
+    assert _guarded_args(
+        "read_file", {"file_path": "sources.md", "base_dir": "/opt/octop/skills/demo/references"}, workspace
+    ) == {"file_path": "/opt/octop/skills/demo/references/sources.md"}
+
+
+def test_sandbox_workspace_dir_leaves_absolute_paths_alone() -> None:
+    workspace = _sandbox_workspace(sandbox_workspace_dir="/workspace")
+    assert _guarded_args("read_file", {"file_path": "/opt/octop/skills/demo/SKILL.md"}, workspace) == {
+        "file_path": "/opt/octop/skills/demo/SKILL.md"
+    }
+
+
+def test_sandbox_workspace_dir_resolves_a_relative_execute_cwd() -> None:
+    workspace = _sandbox_workspace(sandbox_workspace_dir="/workspace")
+    assert _guarded_args("execute", {"command": "python run.py", "cwd": "reports"}, workspace) == {
+        "command": "cd -- /workspace/reports && python run.py"
+    }
+
+
+def test_sandbox_without_workspace_dir_keeps_the_root() -> None:
+    assert _guarded_args("ls", {"path": "."}, _sandbox_workspace()) == {"path": "/"}

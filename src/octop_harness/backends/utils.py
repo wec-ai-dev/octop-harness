@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import posixpath
 import shutil
 import sqlite3
 from pathlib import Path
@@ -154,6 +155,35 @@ def relative_virtual_path(child: str, prefix: str) -> str | None:
     return None
 
 
+def normalize_sandbox_workspace_dir(value: str | None) -> str:
+    """Absolute POSIX form of a sandbox workspace directory.
+
+    ``None``, an empty string and ``/`` all mean "no separate directory": the
+    sandbox root is the workspace. A relative path is a configuration error.
+    """
+    text = (value or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+    if not text.startswith("/"):
+        msg = f"sandbox_workspace_dir must be an absolute path, got {value!r}"
+        raise ValueError(msg)
+    normalized = "/" + posixpath.normpath(text).lstrip("/")
+    return "" if normalized == "/" else normalized
+
+
+def sandbox_workspace_dir_of(backend: object | None) -> str:
+    """In-sandbox directory that holds the agent workspace, or ``""`` for the sandbox root.
+
+    A sandbox backend (``sandbox_fs=True``) treats its root ``/`` as the agent
+    workspace unless it sets ``sandbox_workspace_dir`` (for example
+    ``/workspace``). Paths are then literal: the workspace-relative ``SOUL.md``
+    is the sandbox path ``/workspace/SOUL.md``, and system directories such as
+    ``/home`` or ``/tmp`` stay outside the workspace.
+    """
+    raw = getattr(backend, "sandbox_workspace_dir", None)
+    return normalize_sandbox_workspace_dir(raw) if isinstance(raw, str) else ""
+
+
 try:
     from deepagents.backends import FilesystemBackend, LocalShellBackend
 
@@ -217,5 +247,7 @@ __all__ = [
     "materialize_storage_path",
     "mkdir_local_path",
     "move_local_path",
+    "normalize_sandbox_workspace_dir",
     "relative_virtual_path",
+    "sandbox_workspace_dir_of",
 ]

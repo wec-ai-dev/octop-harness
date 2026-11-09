@@ -51,6 +51,7 @@ from .utils import (
     mkdir_local_path,
     move_local_path,
     relative_virtual_path,
+    sandbox_workspace_dir_of,
 )
 
 if TYPE_CHECKING:
@@ -224,6 +225,11 @@ def _present_workspace_path(
     if backend is not None and is_cloud_storage_backend(backend):
         virt = remote_workspace_virtual_root(workspace_dir)
         rel = relative_virtual_path(raw, virt)
+        if rel is not None:
+            return rel if rel else "."
+    sandbox_root = sandbox_workspace_dir_of(backend)
+    if sandbox_root:
+        rel = relative_virtual_path(raw, sandbox_root)
         if rel is not None:
             return rel if rel else "."
     ws = workspace_dir.resolve()
@@ -434,11 +440,36 @@ class BackendWorkspace:
                 fragments.append(fragment)
         return fragments
 
+    def _sandbox_key(self, fragment: str) -> str:
+        """Sandbox path of a workspace-relative *fragment* (the workspace itself for ``""`` / ``.``).
+
+        The sandbox root ``/`` is the workspace unless the backend declares a
+        ``sandbox_workspace_dir`` (see :func:`sandbox_workspace_dir_of`).
+        """
+        root = sandbox_workspace_dir_of(self._backend)
+        if not fragment or fragment == ".":
+            return root or "/"
+        return f"{root}/{fragment}"
+
+    def _map_absolute(self, path: str) -> str:
+        """Prefix the well-known system paths of an absolute *path*.
+
+        Inside a declared ``sandbox_workspace_dir`` the prefix applies to the
+        part below the workspace, exactly as it does below ``/`` otherwise.
+        """
+        text = path.replace("\\", "/")
+        root = sandbox_workspace_dir_of(self._backend)
+        if root:
+            rel = relative_virtual_path(text, root)
+            if rel:
+                return f"{root}/{apply_system_files_prefix(rel, self._system_files_path)}"
+        return apply_system_files_prefix(text, self._system_files_path)
+
     def _resolve_root_fragment(self, fragment: str) -> str:
         """Resolve a workspace-relative fragment without system-path remapping."""
         text = _strip_relative_prefix(fragment.replace("\\", "/"))
         if getattr(self._backend, "sandbox_fs", False):
-            return "/" if not text or text == "." else f"/{text}"
+            return self._sandbox_key(text)
         resolved = str((self._workspace_dir / text).resolve())
         Path(resolved).relative_to(self._workspace_dir.resolve())
         return resolved
@@ -476,7 +507,7 @@ class BackendWorkspace:
         if s.startswith("~"):
             return str(Path(s).expanduser().resolve())
         if s.startswith("/"):
-            mapped = apply_system_files_prefix(s.replace("\\", "/"), self._system_files_path)
+            mapped = self._map_absolute(s)
             if getattr(self._backend, "sandbox_fs", False):
                 return mapped
             if _backend_virtual_mode(self._backend):
@@ -493,7 +524,7 @@ class BackendWorkspace:
             return mapped
         fragment = self._stored_relative(s)
         if getattr(self._backend, "sandbox_fs", False):
-            return "/" if not fragment or fragment == "." else f"/{fragment}"
+            return self._sandbox_key(fragment)
         resolved = str((self._workspace_dir / fragment).resolve())
         try:
             Path(resolved).relative_to(self._workspace_dir)
@@ -529,7 +560,7 @@ class BackendWorkspace:
             expanded = str(Path(s).expanduser().resolve())
             return self._remap_cloud_absolute(expanded) if is_cloud_storage_backend(self._backend) else expanded
         if s.startswith("/"):
-            mapped = apply_system_files_prefix(s.replace("\\", "/"), self._system_files_path)
+            mapped = self._map_absolute(s)
             return self._remap_cloud_absolute(mapped) if is_cloud_storage_backend(self._backend) else mapped
 
         fragment = self._stored_relative(s) if map_system_paths else _strip_relative_prefix(s.replace("\\", "/"))
@@ -551,7 +582,7 @@ class BackendWorkspace:
             if is_cloud_storage_backend(self._backend):
                 root = remote_workspace_virtual_root(workspace)
                 return root if not rel_posix else f"{root}/{rel_posix}"
-            return "/" if not rel_posix else f"/{rel_posix}"
+            return self._sandbox_key(rel_posix)
 
         return _virtual_key_under_mount(local, self._backend)
 
