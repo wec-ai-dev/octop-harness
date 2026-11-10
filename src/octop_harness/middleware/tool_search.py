@@ -26,6 +26,22 @@ _TOOL_SEARCH_NAME = "tool_search"
 _MAX_THREAD_CATALOGS = 2048
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _DEFERRED_DESCRIPTION_SUFFIX = "\n\n[Deferred reference: call tool_search before use.]"
+# What a deferred reference keeps from the real description: the first sentence
+# is enough to decide to search for it, and the search catalog keeps 320 chars
+# of every tool, so retrieval is unaffected.
+_DEFERRED_DESCRIPTION_CHARS = 120
+
+
+def _reference_summary(description: str) -> str:
+    """First sentence of *description*, capped, for the model-facing reference."""
+    text = " ".join((description or "").split())
+    if not text:
+        return ""
+    sentence_end = text.find(". ")
+    first = text[: sentence_end + 1] if sentence_end >= 0 else text
+    if len(first) > _DEFERRED_DESCRIPTION_CHARS:
+        first = first[: _DEFERRED_DESCRIPTION_CHARS - 3].rstrip() + "…"
+    return first
 _SUPPORTED_NATIVE_PROVIDERS = frozenset({"openai", "anthropic"})
 
 
@@ -285,7 +301,9 @@ class ToolSearchMiddleware(AgentMiddleware[ClientToolSearchState, Any]):
         return tool.model_copy(
             update={
                 "args_schema": _DeferredToolInput,
-                "description": f"{tool.description or ''}{_DEFERRED_DESCRIPTION_SUFFIX}",
+                # The full text is kept in the search catalog, so what the model
+                # reads here only has to be enough to decide to search for it.
+                "description": f"{_reference_summary(tool.description or '')}{_DEFERRED_DESCRIPTION_SUFFIX}",
                 "extras": extras,
             }
         )

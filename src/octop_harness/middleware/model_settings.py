@@ -56,6 +56,14 @@ def apply_configurable_model_settings(request: ModelRequest) -> ModelRequest:
                 context_window = raw_context if isinstance(raw_context, int) else 0
 
             output_tokens = (getattr(updated, "model_settings", None) or {}).get("max_tokens")
+            if not isinstance(output_tokens, int) or output_tokens <= 0:
+                # The model's own limit is sent on every request by the factory,
+                # so the input cap must leave room for it even when this turn
+                # sets no per-request ``max_tokens``.
+                output_tokens = getattr(model, "_harness_max_output_tokens", 0)
+                if not isinstance(output_tokens, int) or output_tokens <= 0:
+                    raw_output = profile.get("max_output_tokens")
+                    output_tokens = raw_output if isinstance(raw_output, int) else 0
             if isinstance(output_tokens, int) and output_tokens > 0 and context_window > 0:
                 safe_input = max(context_window - output_tokens, 1)
                 profile["max_input_tokens"] = min(base_input, safe_input) if base_input > 0 else safe_input

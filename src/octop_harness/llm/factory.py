@@ -299,6 +299,10 @@ def _build_openai(provider: ProviderConfig, model: ModelConfig, *, max_retries: 
         # off and streamed AIMessages carry no usage_metadata.
         "stream_usage": provider.stream_usage,
     }
+    if model.max_output_tokens > 0:
+        # Without this the provider's default caps the reply, and a long
+        # write_file / edit_file is cut mid-JSON with no way to finish it.
+        kwargs["max_tokens"] = model.max_output_tokens
     if max_retries is not None:
         kwargs["max_retries"] = max_retries
     is_codex = _is_codex_base_url(provider.base_url)
@@ -954,6 +958,19 @@ def _build_anthropic(provider: ProviderConfig, model: ModelConfig, *, max_retrie
     # Enable extended thinking when model.thinking is explicitly True.
     if model.thinking is True:
         kwargs["thinking"] = {"type": "adaptive"}
+    if model.max_output_tokens > 0:
+        # ChatAnthropic defaults to 4096 for model names it does not recognise,
+        # which is below what a long write needs. Thinking tokens count toward
+        # the same limit.
+        kwargs["max_tokens"] = model.max_output_tokens
+    else:
+        # Some providers reject a request above their own ceiling, so an
+        # unknown limit is left out instead of replaced with a larger guess.
+        logger.warning(
+            "Model %r has no max_output_tokens: ChatAnthropic sends its default "
+            "4096-token output limit, which also bounds thinking tokens",
+            model.id,
+        )
     # ChatAnthropic's ``timeout`` (default_request_timeout) is a plain float.
     kwargs["timeout"] = LLM_HTTP_TIMEOUT.read
     instance_a: BaseChatModel = ChatAnthropic(**kwargs)

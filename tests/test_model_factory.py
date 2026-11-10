@@ -195,6 +195,70 @@ class TestBuildChatModel:
         assert instance._harness_native_tool_search is True
         assert instance._harness_tool_search_provider == "anthropic"
 
+    def test_openai_sends_the_configured_output_limit(self) -> None:
+        provider = ProviderConfig(
+            id="example",
+            base_url="https://api.example.com/v1",
+            api_key="sk-x",
+            protocol="openai",
+        )
+        model = ModelConfig(id="gpt-X", max_output_tokens=8192)
+        from langchain_openai import ChatOpenAI
+
+        cls = _get_reasoning_aware_chat_openai(ChatOpenAI)
+        with patch.object(cls, "__init__", return_value=None) as mock_init:
+            build_chat_model(provider, model)
+
+        # Without this the provider's own default caps the reply and a large
+        # write_file is cut mid-JSON.
+        assert mock_init.call_args.kwargs["max_tokens"] == 8192
+
+    def test_openai_omits_an_unset_output_limit(self) -> None:
+        provider = ProviderConfig(
+            id="example",
+            base_url="https://api.example.com/v1",
+            api_key="sk-x",
+            protocol="openai",
+        )
+        model = ModelConfig(id="gpt-X")
+        from langchain_openai import ChatOpenAI
+
+        cls = _get_reasoning_aware_chat_openai(ChatOpenAI)
+        with patch.object(cls, "__init__", return_value=None) as mock_init:
+            build_chat_model(provider, model)
+
+        assert "max_tokens" not in mock_init.call_args.kwargs
+
+    def test_anthropic_sends_the_configured_output_limit(self) -> None:
+        provider = ProviderConfig(
+            id="anthropic",
+            base_url="https://api.anthropic.com",
+            api_key="sk-y",
+            protocol="anthropic",
+        )
+        model = ModelConfig(id="glm-x", max_output_tokens=4096)
+        with patch("langchain_anthropic.ChatAnthropic") as mock_cls:
+            build_chat_model(provider, model)
+
+        # ChatAnthropic would otherwise default unknown model names to 4096.
+        assert mock_cls.call_args.kwargs["max_tokens"] == 4096
+
+    def test_anthropic_warns_when_the_output_limit_is_unset(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        provider = ProviderConfig(
+            id="anthropic",
+            base_url="https://api.anthropic.com",
+            api_key="sk-y",
+            protocol="anthropic",
+        )
+        model = ModelConfig(id="glm-x")
+        with patch("langchain_anthropic.ChatAnthropic") as mock_cls:
+            build_chat_model(provider, model)
+
+        assert "max_tokens" not in mock_cls.call_args.kwargs
+        assert "no max_output_tokens" in caplog.text
+
     def test_bedrock_protocol_reports_clear_import_error_when_missing(self) -> None:
         """When ``langchain_aws`` is not importable, surface a clear instruction."""
         provider = ProviderConfig(

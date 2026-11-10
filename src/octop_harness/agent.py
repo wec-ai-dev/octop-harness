@@ -56,6 +56,7 @@ from octop_harness.middleware.skill_filter import SkillFilterMiddleware, render_
 from octop_harness.middleware.tool_order import TaskToolLastMiddleware
 from octop_harness.middleware.tool_search import ToolSearchMiddleware
 from octop_harness.middleware.tools_filter import ToolsFilterMiddleware
+from octop_harness.middleware.truncation_notice import OutputTruncationMiddleware
 from octop_harness.protocols import resolve_protocol
 from octop_harness.request import ChatRequest
 
@@ -1518,6 +1519,7 @@ class HarnessAgent:
         chain: list[Any] = [
             ModelRouterMiddleware(cfg, self._model_factory, get_protocol=self._get_protocol),
             ModelSettingsMiddleware(),
+            OutputTruncationMiddleware(),
             SessionHeaderMiddleware(),
             SkillFilterMiddleware(config=cfg),
             McpToolErrorMiddleware(),
